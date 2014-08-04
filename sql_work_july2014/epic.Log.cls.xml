@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Export generator="Cache" version="25" zv="Cache for UNIX (Apple Mac OS X for x86-64) 2014.1 (Build 608U)" ts="2014-07-30 15:21:13">
+<Class name="epic.Log">
+<Super>%Persistent,%Populate</Super>
+<TimeChanged>63398,36022.318498</TimeChanged>
+<TimeCreated>63397,74971.517998</TimeCreated>
+
+<Property name="Message">
+<Type>%String</Type>
+<Parameter name="MAXLEN" value="1000"/>
+<Parameter name="POPSPEC" value="StringMin(10,30)"/>
+</Property>
+
+<Property name="Timestamp">
+<Type>epic.Timestamp</Type>
+<Parameter name="POPSPEC" value="Integer(1,30000000000)"/>
+</Property>
+
+<Property name="CalcTimestamp">
+<Type>epic.Timestamp</Type>
+<SqlComputeCode> set {CalcTimestamp} = $random(300000000)+1 </SqlComputeCode>
+<SqlComputed>1</SqlComputed>
+</Property>
+
+<Index name="TimestampIndex">
+<Properties>Timestamp</Properties>
+</Index>
+
+<Storage name="Default">
+<Type>%Library.CacheStorage</Type>
+<DataLocation>^epic.LogD</DataLocation>
+<DefaultData>LogDefaultData</DefaultData>
+<IdLocation>^epic.LogD</IdLocation>
+<IndexLocation>^epic.LogI</IndexLocation>
+<StreamLocation>^epic.LogS</StreamLocation>
+<ExtentSize>100000</ExtentSize>
+<Data name="LogDefaultData">
+<Value name="1">
+<Value>%%CLASSNAME</Value>
+</Value>
+<Value name="2">
+<Value>Message</Value>
+</Value>
+<Value name="3">
+<Value>Timestamp</Value>
+</Value>
+<Value name="4">
+<Value>CalcTimestamp</Value>
+</Value>
+</Data>
+<Property name="%%CLASSNAME">
+<Selectivity>0.0074%</Selectivity>
+<OutlierSelectivity>.999262:</OutlierSelectivity>
+</Property>
+<Property name="CalcTimestamp">
+<Selectivity>0.0010%</Selectivity>
+</Property>
+<Property name="Message">
+<Selectivity>0.0010%</Selectivity>
+</Property>
+<Property name="Timestamp">
+<Selectivity>0.0010%</Selectivity>
+</Property>
+<SQLMap name="IDKEY">
+<BlockCount>-2368</BlockCount>
+</SQLMap>
+<SQLMap name="TimestampIndex">
+<BlockCount>-716</BlockCount>
+</SQLMap>
+</Storage>
+</Class>
+</Export>

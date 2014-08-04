@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Export generator="Cache" version="25" zv="Cache for UNIX (Apple Mac OS X for x86-64) 2014.1 (Build 608U)" ts="2014-07-30 10:19:04">
+<Class name="epic.ManyProperties">
+<Super>%RegisteredObject</Super>
+<TimeChanged>63398,32618.58437</TimeChanged>
+<TimeCreated>63397,77045.952849</TimeCreated>
+
+<Method name="out">
+<ClassMethod>1</ClassMethod>
+<FormalSpec>string...:%String</FormalSpec>
+<Implementation><![CDATA[
+	if ( '$data(string) ) { set string = "" }
+	quit:('^||verbose)
+	if ( string?.N ) {
+		for i=1:1:string {
+			write string(i)
+		}
+	} else {
+		write string
+	}
+	write !
+]]></Implementation>
+</Method>
+
+<Method name="BigTest">
+<ClassMethod>1</ClassMethod>
+<Implementation><![CDATA[
+	set ^||verbose=0
+	set numberOfClassesMin = 5
+	set numberOfClassesMax = 20,propertiesPerClassMin = 100,propertiesPerClassMax = 500
+	set recordCount=10
+	set classStep = 5, propertyStep = 100
+	set maxNumberOfColumns=300
+	write $listtostring($lb("#classes","#properties","#properties in select","works","error")),!
+	for classi=numberOfClassesMin:classStep:numberOfClassesMax {
+		for propi=propertiesPerClassMin:propertyStep:propertiesPerClassMax {
+			try {
+				do ..Test(recordCount,classi,propi,maxNumberOfColumns)
+				Write $listtostring($lb(classi,propi,maxNumberOfColumns,1)),!
+			} catch error {
+				Write $listtostring($lb(classi,propi,maxNumberOfColumns,0,$get(%objlasterror))),!
+				kill %objlasterror
+			}
+		}
+		//break
+	}
+]]></Implementation>
+</Method>
+
+<Method name="EmbeddedSQL">
+<ClassMethod>1</ClassMethod>
+<Implementation><![CDATA[
+]]></Implementation>
+</Method>
+<Method name="Test">
+<ClassMethod>1</ClassMethod>
+<FormalSpec>recordCount=100,numberOfClasses=3,propertiesPerClass=3,maxColumnsForSelect=500</FormalSpec>
+<Implementation><![CDATA[
+	#dim error as %Exception.AbstractException
+	if ( '$data(^||verbose ) ) { set ^||verbose=1 }
+
+	try {
+		do ..out( "Generate a BigClass with > 1000 properties - should get an error")
+		set badClassName="epic.BigBadClass"
+		do ..generateBigClass(2000,.badClassName)
+		if ( '$system.Status.Equals(%objlasterror,5290) ) {
+			throw ##class(%Exception.Status).CreateFromStatus(%objlasterror)
+		} else {
+			kill %objlasterror
+		}	
+		do ..systemOBJ("Delete",badClassName)
+		
+		set package="epicsplit", fullColumnList = ""
+		do ..systemOBJ("DeletePackage",package)
+		do ..out()
+		do ..out("******************************")
+		do ..out("Generating ",numberOfClasses," 'split' classes with ",propertiesPerClass," properties")
+		do ..out("Generating ",recordCount," records for each 'split' class")
+		for i=1:1:numberOfClasses {
+			set className=package_".BigClass"_i,alias="ep"_i
+			do ..generateBigClass(propertiesPerClass,.className,.columnList)
+			// throw 1000 records into the class 
+			do $classmethod(className,"%DeleteExtent")
+			do $classmethod(className,"Populate",recordCount)
+			// fix up the columnList with alias reference
+			// to build the view 
+			set cl=$listfromstring(columnList)
+			for j=1:1:$listlength(cl) {
+				set $list(cl,j)=alias_"."_$list(cl,j)
+			}
+			set fullColumnList = fullColumnList _ columnList
+			set:(i<numberOfClasses) fullColumnList = fullColumnList _ ","
+			set columns(className)=$listtostring(cl)
+			set columns(className,"alias")=alias
+		}
+	
+		do ..out("fullColumnList = ",fullColumnList )
+		// now generate a VIEW
+	
+		//do ..GetViewSql(recordCount,numberOfClasses,propertiesPerClass,maxColumnsForSelect,.columns,.viewsql)		
+		do ..GetViewSqlArray(recordCount,numberOfClasses,propertiesPerClass,maxColumnsForSelect,.columns,.viewsql)		
+		do ..out(.viewsql)
+		//break
+
+		do ..out("Creating view")
+		
+		set result = $system.SQL.Execute(.viewsql)
+		zw result
+		do $system.OBJ.Compile("epic.BigClassView")
+		//break	
+		set stmt = ##class(%SQL.Statement).%New()
+		$$$THROWONERROR(sc,stmt.%Prepare("select count(*) from epic.BigClassView"))
+		set result = stmt.%Execute()
+		do ..out("Result of count(*) should be ",recordCount)
+		do:(^||verbose) result.%Display()
+
+		// chop down the fullColumnList to only 300 columns
+		set fcl=$listfromstring(fullColumnList),smallerItemList=$listbuild()
+		if ( maxColumnsForSelect'="*" ) {
+		do ..out("Trimming select query to return only ",maxColumnsForSelect," columns")
+		for jj=1:1:maxColumnsForSelect {
+needAnotherItem 
+			set jjj=$random(numberOfClasses*propertiesPerClass)+1
+			set item = $listget(fcl,jjj)
+			if ( $data(jjitems(item) ) ) { 		// already got this item, grab another
+				goto needAnotherItem			
+			} else {
+				set jjitems(item)=1
+			}
+			set $list(smallerItemList,jj)=item
+			
+		}
+		set columnList = $listtostring(smallerItemList)
+		} else {
+			set columnList = "*"
+		}
+		//set select = "select top 2 * from epic.BigClassView"
+		set select = "select top 2 "_columnList_" from epic.BigClassView"
+		do ..out(select)
+		//write select break
+		set sc=stmt.%Prepare(select)
+		if ( $$$ISERR(sc) ) { 
+			do $system.Status.DisplayError(sc) 
+		} else {
+			set result = stmt.%Execute()
+			do:(^||verbose) result.%Display()
+			do ..out()
+			//do ..out("result.%ResultColumnCount from sql='",select,"' is ",result.%ResultColumnCount)
+			do ..out("result.%ResultColumnCount=",result.%ResultColumnCount)
+			// +1 here for the ID column
+			do ..out("result.%ResultColumnCount should be "_((numberOfClasses*propertiesPerClass)+1))
+		}
+		//&sql(select * from epic.BigClassView)
+	} catch error {
+		if ( ^||verbose ) {
+			write error.DisplayString()
+			//zw error
+		}
+		// break if we get an interrupt
+		//if error.Code = 150 { break }
+		throw error
+	}
+]]></Implementation>
+</Method>
+
+<Method name="systemOBJ">
+<ClassMethod>1</ClassMethod>
+<FormalSpec>Method,parameter,flags=""</FormalSpec>
+<Implementation><![CDATA[
+	if ( '^||verbose ) {
+		set flags = flags_"-d"
+	} 
+	do $classmethod("%SYSTEM.OBJ",Method,parameter,flags)
+]]></Implementation>
+</Method>
+
+<Method name="generateBigClass">
+<Description>
+Gernerate a class with 2000 properties</Description>
+<ClassMethod>1</ClassMethod>
+<FormalSpec>numberOfProperties=2000,className,*columnList</FormalSpec>
+<Implementation><![CDATA[
+	#dim error as %Exception.AbstractException
+	
+	try {
+		set cols=$lb()
+		if ( $data(^oddDEF(className) )) {
+			do ..systemOBJ("Delete",className)
+		}
+
+		set cdef=##class(%Dictionary.ClassDefinition).%New(className)
+		set cdef.Super="%Persistent,%Populate"
+		set cdef.ProcedureBlock=1
+		for i=1:1:numberOfProperties {
+		
+			set property=##class(%Dictionary.PropertyDefinition).%New()
+			set property.Name=$piece(className,".",*)_"xProperty"_i
+			set $list(cols,i)=property.Name
+			set property.Type="%String"
+			if ( $random(2) ) {
+				$$$THROWONERROR(sc,property.Parameters.SetAt("StringMin(10,20)","POPSPEC"))
+			} else {
+				$$$THROWONERROR(sc,property.Parameters.SetAt("Integer(1000000)","POPSPEC"))
+			}
+			$$$THROWONERROR(sc,property.Parameters.SetAt(1000,"MAXLEN"))
+			$$$THROWONERROR(sc,cdef.Properties.Insert(property))	
+		
+		}
+		$$$THROWONERROR(sc,cdef.%Save())
+		do ..systemOBJ("Compile",className,"ck")
+		set columnList=$listtostring(cols,",")
+	} catch error {
+		write error.DisplayString()
+	}
+]]></Implementation>
+</Method>
+<Method name="GetViewSql">
+<ClassMethod>1</ClassMethod>
+<FormalSpec><![CDATA[recordCount=100,numberOfClasses,propertiesPerClass,maxColumnsForSelect,&columns,*viewsql]]></FormalSpec>
+<Implementation><![CDATA[
+		if ( $system.SQL.ViewExists("epic.BigClassView") ) {
+			//	&sql(drop view epic.BigClassView)
+		}	
+		do $system.SQL.Delete("epic.BigClassView")
+		set viewsql = "create view epic.BigClassView "
+		set viewsql = viewsql_"	as select ep1.ID as ID,"
+		set cn=$order(columns(""))
+		while ( cn'="" ) {
+			set viewsql=viewsql_columns(cn)
+			set cn=$order(columns(cn))
+			set:(cn'="") viewsql=viewsql_","
+		}
+		set viewsql = viewsql_" from "
+		//epic.BigClass1 ep1, epic.BigClass2 ep2, epic.BigClass3 ep3"
+		set cn=$order(columns(""))
+		while ( cn'="" ) {
+			set viewsql=viewsql_cn_" "_columns(cn,"alias")
+			set cn=$order(columns(cn))
+			set:cn'="" viewsql=viewsql_", "
+		}
+		set viewsql = viewsql_"	where "
+		//ep1.ID = ep2.ID and ep2.ID = ep3.ID"
+		for i=1:1:(numberOfClasses-1) {
+			set viewsql=viewsql_"ep"_i_".ID = ep"_(i+1)_".ID "
+			set:i<(numberOfClasses-1) viewsql=viewsql_"and "
+		}
+]]></Implementation>
+</Method>
+<Method name="GetViewSqlArray">
+<ClassMethod>1</ClassMethod>
+<FormalSpec><![CDATA[recordCount=100,numberOfClasses,propertiesPerClass,maxColumnsForSelect,&columns,*viewsql]]></FormalSpec>
+<Implementation><![CDATA[
+		if ( $system.SQL.ViewExists("epic.BigClassView") ) {
+			&sql(drop view epic.BigClassView)
+		}
+		set viewsql = "create view epic.BigClassView "
+		set viewsql = viewsql_"	as select ep1.ID as ID,"
+		set viewsql(1)=viewsql
+		set viewsql=1
+		set cn=$order(columns(""))
+		set columnsPerLine=50,ccount=1,line=""
+		//break
+		while ( cn'="" ) {
+			set collist = $listfromstring(columns(cn)) 
+			for ci=1:1:$listlength(collist) {
+				set line=line_$list(collist,ci)
+				set ccount = ccount +1
+				if ( ci<$listlength(collist)) {
+					set line=line_", " 
+				}
+				if ( ccount = columnsPerLine ) {
+					set viewsql($i(viewsql))=line
+					set ccount=1,line=""
+				} 
+			}
+			// could have left over columns in the line
+			set cn=$order(columns(cn))
+			if ( line'="" ) {
+				set:(cn'="") line=line_","
+				set viewsql($i(viewsql))=line
+			}
+			set line=""
+		}
+		set viewsql($i(viewsql))=" from "
+		//epic.BigClass1 ep1, epic.BigClass2 ep2, epic.BigClass3 ep3"
+		set cn=$order(columns(""))
+		while ( cn'="" ) {
+			set line=cn_" "_columns(cn,"alias")
+			set cn=$order(columns(cn))
+			set:cn'="" line=line_", "
+			set viewsql($i(viewsql))=line
+		}
+		set viewsql($i(viewsql))="	where "
+		//ep1.ID = ep2.ID and ep2.ID = ep3.ID"
+		for i=1:1:(numberOfClasses-1) {
+			set line="ep"_i_".ID = ep"_(i+1)_".ID "
+			set:i<(numberOfClasses-1) line=line_"and "
+			set viewsql($i(viewsql))=line
+		}
+		write "----viewsql----",!
+		//break
+]]></Implementation>
+</Method>
+</Class>
+</Export>

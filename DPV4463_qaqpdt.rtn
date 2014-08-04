@@ -1,0 +1,652 @@
+^MAC^Save for Source Control^^~Format=Cache.S~^RAW
+%RO
+%qaqpdt^MAC^^^0
+%qaqpdt ;  Query processor ADT/opt (categories) (Aviel 10/29/96)  ;  AK286 V32
+#INCLUDE %msql
+#IF 0   ;-------------------------------------------------------------
+	; Description:   Query processor ADT/Operation Table (categories)
+	; Author:        Aviel Klausner
+	; Date Started:  October 29, 1996
+	;
+	;  DPV3330 (12/30/2008) - Correct type information for SUBSTRING function
+	;  DPV3270 (09/25/2008) - Correct type returned for XMLAGG columns
+	;  DPV3230 (08/01/2008) - Correct DATE <op> TIMESTAMP when user-defined datatypes are used 
+	;  DPV3220 (07/15/2008) - Improve PRECISION and SCALE reporting for Aggregates and other functions
+	;  DPV3191 (06/11/2008) - Report error for SUM() on DATE, TIME, or TIMESTAMP values
+	;  DPV3173 (06/09/2008) - Reduce use of %Library.Float, some functions return DOUBLE or NUMERIC
+	;  DPV3174 (05/28/2008) - Perform string-op-string operations for ], %PATTERN, and %STARTSWITH
+	;  DPV3170 (05/23/2008) - Perform Normalization on literal and host variable input values
+	;  AK667   (12/21/2006) - Recompute mt("unary") entries
+	;  DPV3131 (03/25/2008) - DD Lookup and Table compiler performance improvements
+	;  DPV3060 (10/26/2007) - Fixes for %FilemanDate and %FilemanTimeStamp datatypes in SQL
+	;  DPV3053 (10/16/2007) - For COALESCE function return best compatible type
+	;  DPV3045 (10/03/2007) - Correct type information for CASE, other functions.
+	;  DPV2849 (01/25/2007) - More 999 -> $$$MaxStringLength changes
+	;  DPV2768 (10/19/2006) - SQL Fix ProdLog 53024: New Case for DPV2463 - Subquery output in correct mode
+	;  DPV2527 (09/28/2005) - SQL Fix: Fix <SUBSCRIPT> in putvardt^%qaqpdt from AK630
+ 	;  AK630   (08/23/2005) - Fix datatype determination in subqueries
+	;  PVA076  (04/01/2005) - SELECT DISTINCT or SELECT of GROUP BY columns no failed to invoke LogicalToODBC.
+	;  DPV2463 (07/19/2005) - Set column datatype properly for subquery in SELECT clause
+	;  DPV2312 (10/26/2004) - Fix type reported for functions NVL, ISNULL, IFNULL, NULLIF, and COALESCE
+	;  DPV2060 (08/21/2003) - Eliminate ^mdd - Use new 'smd' macros
+	;  AK562   (04/25/2003) - Apply correct %ODBCIN to IN parameters
+	;  BJB242  (10/16/2002) - Correct BJB237, change = to '= in $Select
+	;  BJB237  (08/27/2002) - Avoid <MAXNUMBER> error in SQL constants
+	;  DPV1801 (08/21/2002) - Hard-code more TimeStamp/Date/Time conversions for IN
+	;  DPV1638 (01/07/2002) - Use field's type parameters for input value ODBCToLogical conversion
+	;                         Change @mt@( to mt(
+	;  DPV1431 (10/24/2000) - Changed all %Date to %Library.Date, %Time[Stamp] to %Library.Time[Stamp], etc
+	;  AK446   (05/31/2000) - View stream processing
+	;  AK378   (07/02/1999) - CCS: Hard-code operation %TimeStamp=%Date
+	;  AK361   (04/29/1999) - ODBC datatype reporting and conversion
+	;  DPV1033 (04/09/1999) - Translate constant valeus from ODBC to Logical mode when 
+	;                         compiling with #sqlcompile select=odbc
+	;  AK347   (01/06/1999) - Input conversion
+	;  AK333   (10/23/1998) - Change hard-coded %STRING/%MVALUE to %String/STRING
+	;  AK306   (01/12/98)   - Use %String as default datatype
+	;  AK304   (01/06/98)   - List-fields in the Query Processor
+	;  AK289   (04/07/97)   - Restructure INSERT/UPDATE
+	;  AK286   (10/29/96)   - Use operation table (SQL categories) in QP
+	;                        (routine created)
+	;
+	;-------------------------------------------------------------
+	;                       I N F O R M A T I O N
+	;-------------------------------------------------------------
+	;
+	;  This program implements the query processor code to use the
+	;  category API and apply it.  It also generates a new structure
+	;  in the parse tree, the list of value tree objects (vtr).
+	;
+	;  Functions implemented here to be used as external entry-points:
+	;       docats - main e.p. to process all operations in the parse
+	;                tree, based on the category table.
+	;       $$getdtvar(vtr) - get the datatype of the given host variable
+	;
+	;-------------------------------------------------------------
+	;               External entry points used in this routine
+	;  findopt^%qadop - searches the
+	;      category/operations table and returns its findings
+	;  cast^%qadop - search for CAST, actually calls
+	;       findopt("CAST",2,from_","_to,...)
+	;  GetType^%qadfld2(irn,ifn) - the datatype of the given DD field
+	;
+#ENDIF  ;-------------------------------------------------------------
+	$$$Abort  ; Not an Entry Point!!
+	#;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+	#;  Value tree property macros - moved to %msql.INC  ;  AK304
+	#;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+	#;                       Query processor code
+docats	;  main e.p. - process all operations in the parse tree, based on
+	#;  the category table.  Also, set up the vtr objects (value tree)
+	#;  for all val# and log#
+	#;  called from ^qo, after calling 'linx', before calling 'not'
+	n log,val
+	#;  initialize counters
+	s mt("maxv")=maxv,mt("maxl")=$o(mt("l",""),-1)
+	#;  process mt("v",val) and create a new vtree object for each val
+	f val=1:1:mt("maxv") d createval(val)
+	#;  process mt("l",log) and create a new vtree object for each log
+	f log=1:1:mt("maxl") d createlog(log)
+#IF 1   ; AK289+
+	#;  For INSERT/UPDATE SET f1=:v1, assign f1's datatype and mlv to v1
+	n i
+	f i=1:1 s val=$p($g(mt("flist")),",",i) q:'val  d putvardt($p($g(mt("nuval")),",",i),val,1,1)
+#ENDIF  ; AK289-
+	#;  Now pass the whole list again, to mark undeclared variables
+	#;      (if not assigned already as part of an expr) as %Library.String  ;  AK306;AK333
+	f val=1:1:mt("maxv") d:$$$VTRgetdt(val)="" dtset(val,"%Library.String")
+	QUIT  ;--- docats
+	#;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+getcat(dt="") [] PUBLIC { 
+		#;  return category of given datatype, or STRING if error
+	QUIT:dt="" "STRING"
+	s cat=$$$comClassKeyGet(dt,$$$cCLASSsqlcategory) s:cat="" cat="STRING"
+	QUIT cat  ;--- $$getcat  ;  AK306;AK333
+}
+	#;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+getodbc(dt="") [] PRIVATE { ;  return ODBCTYPE of given datatype, or VARCHAR if error
+	QUIT:dt="" "VARCHAR"
+	s odbc=$$$comClassKeyGet(dt,$$$cCLASSodbctype) s:odbc="" odbc="VARCHAR"
+	QUIT odbc  ;--- $$getodbc
+}
+	#;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+declared(var)  ;  declared dt of the local var (via SQL or ##class), or NULL
+	#;  for now, always return NULL
+	#;  DPV3053 - for now always return %Library.String
+	QUIT "%Library.String"
+	QUIT ""  ;--- $$declared
+	#;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+nextv() ;  $$:  return next val# available, update counters
+	s mt("maxv")=mt("maxv")+1,maxv=mt("maxv")
+	QUIT mt("maxv")  ;--- $$nextv
+nextl() ;  $$:  return next log# available, update counters
+	s mt("maxl")=mt("maxl")+1
+	QUIT mt("maxl")  ;--- $$nextl
+	#;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+	#;              Value tree (vtr) object implementation
+	#;  PROPERTIES:
+	#;      type - bool/compare/ignore/field/const/var/op/extfun/meth/
+	#;             agg/subq/oldname(?)/as/mexpr(?)/unk(?)
+	#;             (maybe also select/where/join/order/into/group/having)
+	#;      dt - datatype
+	#;      cat - category
+	#;      qno - subquery it's part of (maybe not always filled yet)
+	#;      narg - number of arguments
+	#;      larg - LIST(val,val) of narg arguments
+	#;      lpar - LIST(vtr,vtr) where used - back-pointer to larg
+	#;             (incl. SELECT-list, WHERE, etc.?)
+	#;      str - stream# - for field
+	#;      irn - for field
+	#;      ifn - for field
+	#;      omsinfo - information for ODBC client-server
+#IF 0   ; AK304+
+	#;      mlv - multi-line value - 1/0
+#ELSE   ; AK304=
+	#;      IsLF - Whether it is a list-field ("Y") or not
+	#;      LFDel - Serialized format delimiter, or NULL for $LIST
+	#;      LFStorage - Storage type, serialized (1) or one-per-node (2)
+#ENDIF  ; AK304-
+	#;  (Other properties, to be added later to make mt("v") obsolete:)
+	#;      name - operator (for log/comp/const/var/op/extfun/meth?/agg/as
+	#;      lfld - LIST(,val,) of fields used (also subq's, agg's?)
+	#;      lstr - LIST(str,) of streams used (esp. for type field)
+	#;      agginfo - information for agg
+	#;      qinfo - information for subq
+	#;  METHODS:
+	#;    class methods:
+	#;      create(vtr,type,dt,qno,narg,larg,name) - make new entry
+	#;      createval(val) - for the given old val#
+	#;      createlog(log) - for the given old log#
+	#;    instance methods:
+	#;      $$exist() - whether such object exists
+	#;      $$dtset(%val) - SET method for dt - also sets cat
+	#;      $$getdtvar(vtr) - return the dt of a host variable/"?"
+	#;  IMPLEMENTATION:
+	#;  Stored in array mt("vtr",%this), where %this corresponds to
+	#;  mt("v") subscripts.  for log/comp, -%this corresponds to
+	#;  mt("l") subscripts.
+	#;  The top node stores properties in $P(;):
+	#;      mt("vtr",vtr) = type;dt;cat;qno;str;irn;ifn;narg
+	#;  Other properties are stored in subscript nodes:
+	#;      mt("vtr",vtr,propname) = propvalue for these properties:
+	#;           name,larg,lpar,lfld,lstr,agginfo,qinfo,omsinfo
+	#;  Last val# used is in mt("maxv")
+	#;  Last log# used (positive!) is in mt("maxl")
+	#;
+	#;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+	#;              value tree methods implementation
+create(vtr,type="",dt="",qno="",narg="",larg="",name="",scale="")  ;  create new vtr entry,
+	#;  with the given property values
+	s $$$VTRtype(vtr)=type
+	d dtset(vtr,dt)  ;  to also set cat
+	s $$$VTRqno(vtr)=qno
+	s $$$VTRnarg(vtr)=narg
+	s $$$VTRname(vtr)=name
+	s:scale'="" $$$VTRscale(vtr)=scale	// DPV3173
+#IF 1   ; AK347+
+	QUIT  ;  remove unused subnodes, for now
+#ENDIF  ; AK347-
+	s $$$VTRlarg(vtr)=larg
+	QUIT  ;--- create
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+createval(vtr)  ;  for the given old val#
+	QUIT:$d(mt("vtr",vtr))  ;  already created
+#IF 1   ; AK630+
+	n larg,ldt,narg,op,v
+#ENDIF  ; AK630-
+	s v=mt("v",vtr)
+	i $e(v)="i" d create(vtr,"ignore") QUIT  ;  ignore (map subscripts?)
+	i $e(v)="f" DO  QUIT  ;  field
+	. n ifn,irn,str
+	. s str=$p(v,"^",2),ifn=$p(v,"^",3),irn=+mt("r",str)
+#IF 1   ; AK446+
+#IF 0   ; AK667+
+	#;  virtual stream *** fix datatype+info!
+	. i $g(mt("r",str,"q")) s v=$g(mt("virf",ifn)) d create(vtr,"field",$s(v="":"%Library.String",$li(v)=0:"%Library.Integer",1:$$$VTRgetdt($li(v,2))),$p(mt("r",str),"^",2),,,) s $$$VTRifn(vtr)=ifn,$$$VTRirn(vtr)=irn QUIT
+#ELSE   ; AK667=
+	#;  virtual stream - copy datatype/irn/ifn!
+	. i $g(mt("r",str,"q")) s v=$g(mt("virf",ifn)),op=$lg(v,2) d createval(op):op,create(vtr,"field",$s(v="":"%Library.String",$li(v)=0:"%Library.Integer",1:$$$VTRgetdt(op)),$p(mt("r",str),"^",2)) s:op ifn=$$$VTRifn(op),irn=$$$VTRirn(op),$$$VTRscale(vtr)=$$$VTRscale(op) s $$$VTRifn(vtr)=ifn,$$$VTRirn(vtr)=irn QUIT
+#ENDIF  ; AK667-
+#ENDIF  ; AK446-
+	. d create(vtr,"field",$$GetType^%qadfld2(irn,ifn),$p(mt("r",str),"^",2),,,)
+	. s $$$VTRifn(vtr)=ifn  ;  ,$$$VTRlfld(vtr)=","_vtr_",",$$$VTRlstr(vtr)=str_","  ;  remove unused subnodes, for now  ;  AK347
+	. s $$$VTRirn(vtr)=irn,$$$VTRIsLF(vtr)=$$$smdColListCollection(1,irn,ifn)
+	. s $$$VTRLFDel(vtr)=$$$smdColListDelimiter(1,irn,ifn)
+	. s:$$$VTRgetIsLF(vtr)="Y" $$$VTRLFStorage(vtr)=$$$smdColListType(1,irn,ifn)
+	.  ;  s $$$VTRomsinfo(vtr)="***"  ;  ***  for all cases!  ;  remove unused subnodes, for now  ;  AK347
+	i $e(v)="t" DO  QUIT  ;  constant
+	. n const
+	. s const=$p(v,"^",2,$$$MaxStringLength)
+	. d create(vtr,"const",$s(+$Number(const)'=const:"%Library.String",const[".":"%Library.Numeric",1:"%Library.Integer"),,,,const)	// DPV3173 (Numeric, not Float)
+	.  ;  s $$$VTRlfld(vtr)=","  ;  remove unused subnodes, for now  ;  AK347
+	i $e(v)="x" DO  QUIT  ;  host variable
+	. n var
+	. s var=$p(v,"^",2,$$$MaxStringLength)
+	. d create(vtr,"var",$$declared(var),,,,var)
+	.  ;  s $$$VTRlfld(vtr)=","  ;  remove unused subnodes, for now  ;  AK347
+	if $e(v)="a" {
+		if $p(v,"^",2)="sum",$case($$$VTRgetcat($p(v,"^",5)),"DATE":1,"TIME":1,"TIMESTAMP":1,:0) n cat s cat=$$$VTRgetcat($p(v,"^",5)) d error(379)	// DPV3191
+		if $p(v,"^",2)="xmlagg" { d create(vtr,"agg","%Library.String",,,,) }	// DPV3270
+		else { d create(vtr,"agg",$s($p(v,"^",2)="count":"%Library.Integer",$p(v,"^",2)="avg":$s($$$VTRgetcat(vtr)="DOUBLE":"%Library.Double",1:"%Library.Numeric"),1:$$$VTRgetdt($p(v,"^",5))),,,,) }	// DPV3173= 
+		QUIT
+	}
+	if $e(v)="q" {	// DPV2463+
+		n dt,ovals s dt="%Library.String"
+			#; If this sub-query outputs 1 field and this query is output by the main query, set the proper type for this sub-query
+		If $d(mt("o",$p(v,"^",2)),ovals),$p(ovals,",",2)="",$p($p(ovals,","),"^",2) /*,(","_$p($g(mt("o",1)),"^",2)_",")[(","_vtr_",")*/ s dt=$$$VTRgetdt($p($p(ovals,","),"^",2))	// DPV2768 (no m>1)	// DPV3842, not just subqs output by outermost select
+		d create(vtr,"subq",dt,,,,) 
+		QUIT
+	}	// DPV2463-
+	i $e(v)="n" d create(vtr,"as",,,,,) QUIT  ;  ***
+	#;  *** other cases - functions, $$extfuns, methods, others?
+	i $e(v)'="v" d create(vtr,$e(v),,,,,) QUIT
+	s op=$p(v,"^",2)
+	d args  ;  set narg,larg,ldt, uses v, process arguments recursively
+	d create(vtr,"op",,,narg,larg,op)
+#IF 0   ; AK630+
+#IF 1   ; AK347+
+#IF 0	; DPV2312+
+	d:op="%ODBCIN" dtset(vtr,$p(ldt,","))  ;  use argument's datatype
+#ELSE	; DPV2312=
+	d:$Case(op,"%ODBCIN":1,"NVL":1,"NULLIF":1,"COALESCE":1,:0) dtset(vtr,$p(ldt,","))	//  use first argument's datatype
+	d:$Case(op,"IFNULL":1,:0) dtset(vtr,$p(ldt,",",2))					//  use second argument's datatype
+#ENDIF	; DPV2312-
+#ENDIF  ; AK347-
+#ELSE   ; AK630=
+	#;  need to also set irn/ifn for these cases!
+	do:op="COALESCE" UseBestCompatibleType(vtr,larg,op)
+	do:op="GREATEST"||(op="LEAST") UseBestCompatibleTypeAll(vtr,larg,op)
+	d:$Case(op,"ACOS":1,"ASIN":1,"COS":1,"SIN":1,:0) NumericOrDouble(vtr,$p(larg,","),21,19,18)	//  use DOUBLE or NUMERIC based on first argument's datatype (DPV3173)
+	d:$Case(op,"ATAN":1,"COT":1,"DEGREES":1,"EXP":1,"LOG":1,"LOG10":1,"POWER":1,"RADIANS":1,"SQRT":1,"TAN":1,"TRUNCATE":1,:0) NumericOrDouble(vtr,$p(larg,","),38,36,18)	//  use DOUBLE or NUMERIC based on first argument's datatype (DPV3173)
+	d:$Case(op,"%ODBCIN":1,"ABS":1,"IFNULL":1,"ISNULL":1,"NVL":1,"NULLIF":1,"ROUND":1,:0) copydt(vtr,$p(larg,","))	//  use first argument's datatype (DPV3045)	// DPV3330 (SUBSTRING)
+	if op="SUBSTRING" {
+		if $$$VTRcat($p(larg,","))="STRING" {	// If the first argument to the SUBSTRING is of category STRING, use the type info from the first argument, otherwise the return type of SUBSTRING has to be STRING
+			do copydt(vtr,$p(larg,","))
+		}
+		else {
+			do create(vtr,"op","%Library.String",,,,"SUBSTRING")
+		}
+	}
+	if op="CASE" {
+		new i,v1,larg2
+		set larg2="" for i=2:2 set v1=$p(larg,",",i) if v1'="" { s larg2=larg2_v1_"," } else { set v1=$p(larg,",",i-1),larg2=larg2_v1_"," q  }
+		do UseBestCompatibleTypeAll(vtr,larg2,op)
+	}
+		#; Try to find a good SCALE for ROUND and TRUNCATE
+	if op="ROUND"||(op="TRUNCATE") {
+			#; Hopefully the second argument to ROUND or TRUNCATE was a literal value and we can get the SCALE directly from that
+		new scale,v5
+		set v5=$p(v,"^",5) 
+		if $e($g(mt("v",v5)))="t" {
+			set scale=$normalize($p(mt("v",v5),"^",2),0)
+			set scale=$s(scale>0:scale,1:0)
+			set $$$VTRscale(vtr)=scale
+		}
+	}
+	do:op="IFNULL" copydt(vtr,$p(larg,",",2))											//  use second argument's datatype (DPV3045)
+	d:$Case(op,"DECODE":1,:0) copydt(vtr,$p(larg,",",3))												//  use third argument's datatype (DPV3444)
+#ENDIF  ; AK630-
+	#; PVA076: use arg's type for %EXACT
+	d:op="%EXACT" dtset(vtr,$p(ldt,",")) ; use arg's data type.
+	#;  search in Operation Table
+	n find,gcode,kind,ptarr,retdt,rev
+	s find=$$findopt^%qadop(op,narg,ldt,.kind,.gcode,.retdt,.rev,.ptarr)
+	QUIT:'find  ;  for now, just leave it as is
+	i kind="ERROR" d error(95) QUIT  ;  "Operation disallowed by Operation Table"
+	d dtset(vtr,retdt)  ;  set in the resulting datatype
+	#;  if rev then reverse the arguments (must be narg=2)
+	i rev s larg=$p(larg_","_larg,",",2,3),$$$VTRlarg(vtr)=larg,$p(mt("v",vtr),"^",4,5)=$tr(larg,",","^")
+	#;  if operator given, just set in the new operator
+	i kind="oper" s $$$VTRname(vtr)=gcode,$p(mt("v",vtr),"^",2)=gcode QUIT
+	#;  the following have to be added to ^pre, checking $$$VTRname(vtr)!
+	i kind="expr" s $$$VTRname(vtr)="expr:"_gcode QUIT
+	i kind="method" s $$$VTRname(vtr)="method:"_gcode QUIT
+	QUIT  ;--- createval
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+createlog(log)  ;  for the given old log#
+	#;  a log only has type,name,qno,narg,larg,lpar,lfld,lstr
+	QUIT:''$d(mt("vtr",-log))  ;  already created
+	n i,larg,lcat,ldt,narg,op,v
+	s v=mt("l",log),op=$p(v,"^",2)
+	i $e(v)="i" d create(-log,"ignore") QUIT  ;  ignore
+	d args  ;  set narg,larg,ldt, uses v, process log arguments recursively
+	#;  *** for AND/OR/NOT fill in qno,lpar,lfld,lstr later!
+	i $e(v)="l" d create(-log,"bool",,,narg,larg,op) QUIT
+	#;  *** what about subqueries?
+	#;  comparison and other logicals on values
+	d create(-log,"compare",,,narg,larg,op)
+	#;  search in Operation Table
+	n find,gcode,kind,ptarr,rev
+	s find=$$findopt^%qadop(op,narg,ldt,.kind,.gcode,,.rev,.ptarr,.lcat)			// DPV3230
+.
+		#; If an item is a DATE category, but not %Library.Date type, 
+		#; or a TIMESTAMP category, but not a %Library.TimeStamp type, the datatype class may
+		#; have a LogicalToDate or LogicalToTimeStamp method that will convert the type to DATE or TIMESTAMP.
+		#; Iff this method exists and is runnable, go ahead and call it to convert the method now.
+	for i=1:1:2 {
+		if $p(lcat,",",i)="DATE",$p(ldt,",",i)'="%Library.Date",$$$VTRname($p(larg,",",i))'="CURRENT_DATE" {	// DPV3591
+			if $$$comMemberDefined($p(ldt,",",i),$$$cCLASSmethod,"LogicalToDate"),$$runnable^%qadadt($p(ldt,",",i),"LogicalToDate") {
+				d putval^%qaqpslx("v^METHOD:"_$p(ldt,",",i)_".LogicalToDate^^"_$p(larg,",",i)_"^")
+				d create^%qaqpdt(val,"op",$p(ldt,",",i),,,,"LogicalToDate") 
+				s:info $$$VTRomsinfo(val)=$$definfo^%qaqpif2("%Library.Date")
+				s $p(mt("l",log),"^",3+i)=val,$p(larg,",",i)=val
+			}
+		}
+		if $p(lcat,",",i)="TIMESTAMP",$p(ldt,",",i)'="%Library.TimeStamp",$$$VTRname($p(larg,",",i))'="CURRENT_TIMESTAMP" {	// DPV3591
+			if $$$comMemberDefined($p(ldt,",",i),$$$cCLASSmethod,"LogicalToTimeStamp"),$$runnable^%qadadt($p(ldt,",",i),"LogicalToTimeStamp") {
+				d putval^%qaqpslx("v^METHOD:"_$p(ldt,",",i)_".LogicalToTimeStamp^^"_$p(larg,",",i)_"^")
+				d create^%qaqpdt(val,"op",$p(ldt,",",i),,,,"LogicalToTimeStamp") 
+				s:info $$$VTRomsinfo(val)=$$definfo^%qaqpif2("%Library.TimeStamp")
+				s $p(mt("l",log),"^",3+i)=val,$p(larg,",",i)=val
+				//b  
+			}
+		}
+	}
+		#; At this point all values with Category DATE, MVDATE, or FMDATE should have an actual DATE, MVDATE, or FMDATE value.
+	i 'find,lcat="MVDATE,DATE",narg=2 {				// DPV3451=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.MVDEQDate",rev=0 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.MVDGTDate",rev=0 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.MVDGEDate",rev=0 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.MVDLTDate",rev=0 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.MVDLEDate",rev=0 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.MVDNEDate",rev=0 }
+	}
+	i 'find,lcat="DATE,MVDATE",narg=2 {				// DPV3451=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.MVDEQDate",rev=1 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.MVDLTDate",rev=1 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.MVDLEDate",rev=1 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.MVDGTDate",rev=1 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.MVDGEDate",rev=1 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.MVDNEDate",rev=1 }
+	}
+	i 'find,lcat="TIMESTAMP,MVDATE",narg=2 {				// DPV3451=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.TSEQMVDate",rev=0 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.TSGTMVDate",rev=0 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.TSGEMVDate",rev=0 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.TSLTMVDate",rev=0 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.TSLEMVDate",rev=0 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.TSNEMVDate",rev=0 }
+	}
+	i 'find,lcat="MVDATE,TIMESTAMP",narg=2 {				// DPV3451=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.TSEQMVDate",rev=1 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.TSLTMVDate",rev=1 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.TSLEMVDate",rev=1 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.TSGTMVDate",rev=1 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.TSGEMVDate",rev=1 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.TSNEMVDate",rev=1 }
+	}
+	i 'find,lcat="TIMESTAMP,DATE",narg=2 {	// AK378+
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.TSEQDate",rev=0 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.TSGTDate",rev=0 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.TSGEDate",rev=0 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.TSLTDate",rev=0 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.TSLEDate",rev=0 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.TSNEDate",rev=0 }
+	}
+	i 'find,lcat="DATE,TIMESTAMP",narg=2 {
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.TSEQDate",rev=1 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.TSLTDate",rev=1 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.TSLEDate",rev=1 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.TSGTDate",rev=1 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.TSGEDate",rev=1 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.TSNEDate",rev=1 }
+	}	// AK378-
+	i 'find,lcat="FMTIMESTAMP,TIMESTAMP",narg=2 {	// DPV3060=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSEQTS",rev=0 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSGTTS",rev=0 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSGETS",rev=0 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSLTTS",rev=0 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSLETS",rev=0 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSNETS",rev=0 }
+	}
+	i 'find,lcat="TIMESTAMP,FMTIMESTAMP",narg=2 {	// DPV3060=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSEQTS",rev=1 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSLTTS",rev=1 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSLETS",rev=1 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSGTTS",rev=1 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSGETS",rev=1 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSNETS",rev=1 }
+	}
+	i 'find,lcat="FMDATE,TIMESTAMP",narg=2 {		// DPV3718=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.FMDEQTS",rev=0 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMDGTTS",rev=0 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDGETS",rev=0 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMDLTTS",rev=0 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDLETS",rev=0 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDNETS",rev=0 }
+	}
+	i 'find,lcat="TIMESTAMP,FMDATE",narg=2 {		// DPV3718=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.FMDEQTS",rev=1 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMDLTTS",rev=1 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDLETS",rev=1 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMDGTTS",rev=1 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDGETS",rev=1 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDNETS",rev=1 }
+	}
+	i 'find,lcat="FMTIMESTAMP,DATE",narg=2 {	// DPV3060=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSEQDate",rev=0 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSGTDate",rev=0 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSGEDate",rev=0 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSLTDate",rev=0 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSLEDate",rev=0 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSNEDate",rev=0 }
+	}
+	i 'find,lcat="DATE,FMTIMESTAMP",narg=2 {		// DPV3060=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSEQDate",rev=1 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSLTDate",rev=1 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSLEDate",rev=1 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSGTDate",rev=1 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSGEDate",rev=1 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.FMTSNEDate",rev=1 }
+	}
+	i 'find,lcat="FMDATE,DATE",narg=2 {		// DPV3060=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.FMDEQDate",rev=0 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMDGTDate",rev=0 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDGEDate",rev=0 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMDLTDate",rev=0 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDLEDate",rev=0 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDNEDate",rev=0 }
+	}
+	i 'find,lcat="DATE,FMDATE",narg=2 {		// DPV3060=
+		If op="="      { s find=1,kind="oper",gcode="METHOD:%Collation.FMDEQDate",rev=1 }
+		ElseIf op=">"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMDLTDate",rev=1 }
+		ElseIf op="'<" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDLEDate",rev=1 }
+		ElseIf op="<"  { s find=1,kind="oper",gcode="METHOD:%Collation.FMDGTDate",rev=1 }
+		ElseIf op="'>" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDGEDate",rev=1 }
+		ElseIf op="'=" { s find=1,kind="oper",gcode="METHOD:%Collation.FMDNEDate",rev=1 }
+	}
+	If 'find,op="IN" {	// DPV1801+
+		If $p(lcat,",")="TIMESTAMP" {  // TimeStampItem IN (x,y,z)
+			  #;  Loop over each of the IN items and if they are type Date or Time convert them to TimeStamp
+			n i
+			f i=2:1:narg {
+				If $p(lcat,",",i)="DATE"||($p(lcat,",",i)="TIME") {
+					d putval^%qaqpslx("v^CONVERT:%Library.TimeStamp^^"_$p(larg,",",i)_"^")
+					d create^%qaqpdt(val,"op","%Library.TimeStamp",,,,"Convert") 
+					s:info $$$VTRomsinfo(val)=$$definfo^%qaqpif2("%Library.TimeStamp")
+					s $p(mt("l",log),"^",i+3)=val
+				}
+			}
+		}
+		If $p(lcat,",")="DATE" {  // DateItem IN (x,y,z)
+			  #;  Loop over each of the IN items and if they are type TimeStamp or String convert them to Date
+			n i
+			f i=2:1:narg {
+				If $p(lcat,",",i)="TIMESTAMP"||($p(lcat,",",i)="STRING") {
+					d putval^%qaqpslx("v^CONVERT:%Library.Date^^"_$p(larg,",",i)_"^")
+					d create^%qaqpdt(val,"op","%Library.Date",,,,"Convert") 
+					s:info $$$VTRomsinfo(val)=$$definfo^%qaqpif2("%Library.Date")
+					s $p(mt("l",log),"^",i+3)=val
+				}
+			}
+		}
+		If $p(lcat,",")="TIME" {  // TimeItem IN (x,y,z)
+			  #;  Loop over each of the IN items and if they are type TimeStamp or String convert them to Time
+			n i
+			f i=2:1:narg {
+				If $p(lcat,",",i)="TIMESTAMP"||($p(lcat,",",i)="STRING") {
+					d putval^%qaqpslx("v^CONVERT:%Library.Time^^"_$p(larg,",",i)_"^")
+					d create^%qaqpdt(val,"op","%Library.Time",,,,"Convert") 
+					s:info $$$VTRomsinfo(val)=$$definfo^%qaqpif2("%Library.Time")
+					s $p(mt("l",log),"^",i+3)=val
+				}
+			}
+		}
+	}	// DPV1801-
+	QUIT:'find  ;  for now, just leave it as is
+	i kind="ERROR" d error(95) QUIT  ;  "Operation disallowed by Operation Table"
+	#;  if rev then reverse the arguments (must be narg=2)
+	i rev s larg=$p(larg_","_larg,",",2,3),$$$VTRlarg(-log)=larg,$p(mt("l",log),"^",4,5)=$tr(larg,",","^")
+	#;  if operator given, just set in the new operator
+	i kind="oper" s $$$VTRname(-log)=gcode,$p(mt("l",log),"^",2)=gcode QUIT
+	#;  the following have to be added to ^pre, checking $$$VTRname(-log)!
+	i kind="expr" s $$$VTRname(-log)="expr:"_gcode QUIT
+	i kind="method" s $$$VTRname(-log)="method:"_gcode QUIT
+	#;  *** if not findopt, should also look for NOT(op)!
+	QUIT  ;--- createlog
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+args	;  set narg,larg,ldt, uses v, process arguments recursively
+	#;  also sets datatype for undeclared :var in binary operations
+	n arg
+	s larg="",ldt=""
+	f narg=0:1 s arg=$p(v,"^",narg+4) q:'arg  DO
+	. i $e(v)="l" s $p(larg,",",narg+1)=-arg d createlog(arg) QUIT
+	. s $p(larg,",",narg+1)=arg
+	. d createval(arg)
+	#; AK630 . s $p(ldt,",",narg+1)=$$$VTRgetdt(arg)
+	QUIT:$e(v)="l"	// AK630
+		#;  set datatype of :var in case :var<oper><expr>
+		#;   AK562 = exclude "contains" ('[') operator, do IN
+		#;   AK630 = exclude "FOR SOME" operator
+		#;   DPV3170 = exclude ROUND operator
+		#;   DPV3174 = exclude %STARTSWITH, "]", and %PATTERN - they should always be done as string operations
+		#;   DPV3541 = exclude %MATCHES - they should always be done as string operations
+	if $e(v)="v",narg=2 {
+		n op s op=$p(v,"^",2)
+		if op'="[",op'="FOR SOME",op'="ROUND",op'="%STARTSWITH",op'="]",op'="%PATTERN",op'="%MATCHES",op'="_",",+,-,*,/,\,#,"'[(","_op_",") f narg=1,2 d putvardt($p(larg,",",narg),$p(larg,",",3-narg))
+	}
+	if $e(v)="v",narg=1 {
+		new op s op=$p(v,"^",2)
+		if op="-"||(op="+") set:$e($g(mt("v",$p(larg,",",1))))="x" $$$VTRdt($p(larg,",",1))="%Library.Numeric",$$$VTRcat($p(larg,",",1))="NUMERIC"
+	}
+		#;  set datatype of :var for IN operator
+	i $e(v,1,5)="v^IN^" f arg=2:1:narg d putvardt($p(larg,","),$p(larg,",",arg))
+	i $e(v,1,5)="v^IN^" f arg=2:1:narg d putvardt($p(larg,",",arg),$p(larg,","))
+		#;  account for datatype changes by putvardt() (AK630)
+	f arg=1:1:narg s $p(ldt,",",arg)=$$$VTRgetdt($p(larg,",",arg))
+	QUIT  ;--- args
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+putvardt(arg1,arg2,mlv,insupd=0) [mt] PUBLIC {
+	#;  if arg1 is variable/const/op without a datatype, then assign
+	#;  it the datatype of arg2 (or %Library.String if none)
+	#;  If $g(mlv), then also copy whether it's a multi-line value
+	#;  insupd is 1 when called for the transformation of inputput arguments with their cooresponding fields (DPV305*)
+	QUIT:arg1=""  ;  *** This fixes INSERT-SELECT - should not be here!  ;  AK304, DPV2527= move up above AK630
+	s:$e(mt("v",arg1))="n" arg1=$p(mt("v",arg1),"^",4)  ;  peek thru correlated expr	// AK630=
+	s:$e(mt("v",arg2))="n" arg2=$p(mt("v",arg2),"^",4)  ;  ... or field			// AK630=
+		#;  do it in 5 cases:  
+		#;    <x><op><var> - <var> gets <x>.datatype;  and
+		#;    <x><op><const> - <const> gets <x>.datatype    and
+		#;    <field><op>%ODBCIN(<y>) - %ODBCIN(<y>) gets <field>.datatype   and
+		#;    <field><op>CURTS - CURTS get <field>.datatype if <field>.category is FMTIMESTAMP
+		#;    <field><op>CURDATE - CURDATE get <field>.datatype if <field>.category is FMDATE OR MVDATE
+	if $$$VTRgettype(arg1)'="var",$$$VTRgettype(arg1)'="const",$$$VTRgettype(arg1)'="op" QUIT
+	if $$$VTRgettype(arg1)="op" {
+		s ok=0
+		if $$$VTRgetname(arg1)="%ODBCIN",$$$VTRgettype(arg2)="field" s ok=1
+		if $$$VTRgetname(arg1)="CURRENT_TIMESTAMP",$$$VTRgetcat(arg2)="FMTIMESTAMP" s ok=1
+		if $$$VTRgetname(arg1)="CURRENT_DATE",$case($$$VTRgetcat(arg2),"FMDATE":1,"MVDATE":1,:0) s ok=1
+		if $$$VTRgetname(arg1)="CURRENT_TIMESTAMP",$$$VTRgetcat(arg2)="TIMESTAMP" s ok=1		// DPV3591
+		if $$$VTRgetname(arg1)="CURRENT_DATE",$$$VTRgetcat(arg2)="DATE" s ok=1				// DPV3591
+		QUIT:'ok
+	}
+	d copydt(arg1,arg2)	// AK630
+	s:$g(mlv) $$$VTRIsLF(arg1)=$$$VTRgetIsLF(arg2),$$$VTRLFDel(arg1)=$$$VTRgetLFDel(arg2),$$$VTRLFStorage(arg1)=$$$VTRgetLFStorage(arg2)
+	QUIT  ;--- putvardt
+}
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+exist(%this)  ;  whether such object exists
+	QUIT ''$d(mt("vtr",%this))  ;--- $$exist
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+copydt(%this,%that)  ;  copy %that's datatype (if not empty) to %this, (AK360)
+		#;  Also set the ifn/irn from %that to %this - This is needed so we
+		#;  can acquire the proper type parameters later when doing conversions
+		#;  for this const/var/op value based on the corresponding field's type
+	s $$$VTRirn(%this)=$$$VTRgetirn(%that),$$$VTRifn(%this)=$$$VTRgetifn(%that)
+	QUIT:$$$VTRgetdt(%that)=""  ;  %this might already have a better value!
+	d dtset(%this,$$$VTRgetdt(%that))
+	QUIT  ;--- copydt
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+.
+NumericOrDouble(%this,%that,len,prec,scale) [info,mt] PRIVATE {	// DPV3173=
+		#; Define %this as a DOUBLE if %that is a DOUBLE, otherwise as a NUMERIC
+	if $$$VTRgetdt(%that)="%Library.Float" s $$$VTRdt(%this)="%Library.Float",$$$VTRcat(%this)="DOUBLE" QUIT
+	s thatType=$$$GetOdbcTypeNumber($$getodbc($$$VTRgetdt(%that)))	// thatType is now ODBC datatype number
+	if thatType=8 s $$$VTRdt(%this)="%Library.Double",$$$VTRcat(%this)="DOUBLE" QUIT
+	s $$$VTRdt(%this)="%Library.Numeric",$$$VTRcat(%this)="NUMERIC"
+	s:info $$$VTRomsinfo(%this)=$$definfo^%qaqpif2("%Library.Numeric",len,prec,scale)
+	QUIT
+}
+.
+UseBestCompatibleType(%this,vlist,funcName) ;  copy the best compatible type's datatype (if not empty) to %this,
+	#;  Also set the ifn/irn from bct to %this - This is needed so we
+	#;  can acquire the proper type parameters later when doing conversions
+	#;  for this const/var/op value based on the corresponding field's type
+		#; vlist is a ',' list of values
+		#; Given this list of values, return the val# of the value with the best compatibile datatype of all the types of the values in the list
+	n bct,firstType,retval,t1,t2,thisType s t1(8)=6,t1(2)=5,t1(-5)=4,t1(4)=3,t1(5)=2,t1(-6)=1,bct="",firstType="",retval=+vlist
+	for i=1:1 {
+		s val=$p(vlist,",",i) q:val=""  s thisType=$$$VTRgetdt(val) continue:thisType=""
+		s thisType=$$$GetOdbcTypeNumber($$getodbc(thisType))	// thisType is now ODBC datatype number
+		if firstType="" s (bct,firstType)=thisType,retval=val continue  // First item in list
+		if $case(firstType,-6:1,-5:1,2:1,4:1,5:1,8:1,:0),$case(thisType,-6:1,-5:1,2:1,4:1,5:1,8:1,:0) s:t1(thisType)>t1(bct) bct=thisType,retval=val continue	// Numeric types
+		if firstType'=thisType s retval="" s t1=$$$GetOdbcTypeName(firstType),t2=$$$GetOdbcTypeName(thisType) d error(378)
+	}
+	s $$$VTRirn(%this)=$$$VTRgetirn(retval)
+	s $$$VTRifn(%this)=$$$VTRgetifn(retval)
+	QUIT:$$$VTRgetdt(retval)=""  ;  %this might already have a better value!
+	d dtset(%this,$$$VTRgetdt(retval))
+	QUIT  ;--- UseBestCompatibleType
+.
+UseBestCompatibleTypeAll(%this,vlist,funcName) ;  copy the best compatible type's datatype (if not empty) to %this,
+	#;  Also set the ifn/irn from bct to %this - This is needed so we
+	#;  can acquire the proper type parameters later when doing conversions
+	#;  for this const/var/op value based on the corresponding field's type
+		#; vlist is a ',' list of values
+		#; Given this list of values, return the val# of the value with the best compatibile datatype of all the types of the values in the list
+		#; Datatype precedense is defined as:
+		#;  LONGVARBINARY LONGVARCHAR VARBINARY VARCHAR TIMESTAMP DOUBLE NUMERIC BIGINT INTEGER DATE TIME SMALLINT TINYINT BIT
+	new bct,firstType,retval,t1,t2,thisType 
+	set t1(-4)=14,t1(-1)=13,t1(-3)=12,t1(12)=11,t1(11)=10,t1(8)=9,t1(2)=8,t1(-5)=7,t1(4)=6,t1(9)=5,t1(10)=4,t1(5)=3,t1(-6)=2,t1(-7)=1,t1(-99)=0,bct="",firstType="",retval=+vlist
+	for i=1:1 {
+		set val=$p(vlist,",",i) quit:val=""  
+		set thisType=$$$VTRgetdt(val) continue:thisType=""
+		set thisType=$$$GetOdbcTypeNumber($$getodbc(thisType))	// thisType is now ODBC datatype number
+		set:$g(mt("v",val))="t^" thisType=-99
+		if firstType="" set (bct,firstType)=thisType,retval=val continue  // First item in list
+		set:t1(thisType)>t1(bct) bct=thisType,retval=val 
+		continue
+	}
+	set:retval=-99 retval=12	// All values are NULL, use VARCHAR
+	set $$$VTRirn(%this)=$$$VTRgetirn(retval)
+	set $$$VTRifn(%this)=$$$VTRgetifn(retval)
+	QUIT:$$$VTRgetdt(retval)=""  ;  %this might already have a better value!
+	do dtset(%this,$$$VTRgetdt(retval))
+	QUIT  ;--- UseBestCompatibleTypeAll
+.
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+dtset(%this,%val)  ;  SET method for dt - also sets cat
+	s $$$VTRdt(%this)=$g(%val)
+	s:$g(%val)'="" $$$VTRcat(%this)=$$getcat(%val)
+	QUIT  ;--- dtset
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+	#;                      Datatype of host variable
+getdtvar(val,mlv)  ;  $$:  return the dt of a host variable/"?"
+	#;  return in .mlv (by reference) whether a multi-line value
+	s mlv=($$$VTRgetIsLF(val)="Y")
+	QUIT $$$VTRgetdt(val)
+	#;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+error(e) g ^%qaqperr
+
+
+

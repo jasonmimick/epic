@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Export generator="Cache" version="25" zv="Cache for UNIX (Apple Mac OS X for x86-64) 2014.1 (Build 608U)" ts="2014-07-31 09:56:34">
+<Class name="epic.Timestamp">
+<Description>
+Example custom internal datetime format
+using POSIX Unix internal "logical" format
+number of seconds since 1/1/1970
+
+DisplayFormat = YYYYMMDDThh:mm:ssZ
+
+OdbcFormat = same as DisplayFormat
+</Description>
+<SqlCategory>TIMESTAMP</SqlCategory>
+<Super>%DataType</Super>
+<TimeChanged>63399,35746.12728</TimeChanged>
+<TimeCreated>63397,73852.688261</TimeCreated>
+
+<Method name="LogicalToTimeStamp">
+<ClassMethod>1</ClassMethod>
+<FormalSpec>value:epic.Timestamp</FormalSpec>
+<ReturnType>%TimeStamp</ReturnType>
+<Implementation><![CDATA[
+	set dollarH=$zdatetimeh(value,-2)  // LogicalToTimeStamp
+	return $zdatetime(dollarH,3,1)
+]]></Implementation>
+</Method>
+
+<Method name="TimeStampToLogical">
+<ClassMethod>1</ClassMethod>
+<FormalSpec>value:%String</FormalSpec>
+<ReturnType>epic.Timestamp</ReturnType>
+<Implementation><![CDATA[
+	set dollarH=$zdatetimeh(value,3,1)  // TimeStampToLogical
+	return $zdatetime(dollarH,-2)
+]]></Implementation>
+</Method>
+
+<Method name="LogicalToDisplay">
+<Description>
+Given an internal epic format timestamp
+convert it to a human readable disply form</Description>
+<ClassMethod>1</ClassMethod>
+<FormalSpec>value:epic.Timestamp</FormalSpec>
+<ReturnType>%String</ReturnType>
+<Implementation><![CDATA[
+	// first take seconds since ephoch and convert to $H
+	set dollarH=$zdatetimeh(value,-2)
+	return $zdatetime(dollarH,8,7)
+]]></Implementation>
+</Method>
+
+<Method name="DisplayToLogical">
+<ClassMethod>1</ClassMethod>
+<FormalSpec>value:%String</FormalSpec>
+<ReturnType>%String</ReturnType>
+<Implementation><![CDATA[
+	set dollarH=$zdatetimeh(value,8,7)
+	return $zdatetime(dollarH,-2)
+]]></Implementation>
+</Method>
+
+<Method name="LogicalToOdbc">
+<ClassMethod>1</ClassMethod>
+<FormalSpec>value:epic.Timestamp</FormalSpec>
+<ReturnType>%String</ReturnType>
+<Implementation><![CDATA[
+	//return ..LogicalToDisplay(value)
+	set dollarH=$zdatetimeh(value,-2)
+	return $zdatetime(dollarH,8,7)
+]]></Implementation>
+</Method>
+
+<Method name="OdbcToLogical">
+<ClassMethod>1</ClassMethod>
+<FormalSpec>value:%String</FormalSpec>
+<ReturnType>%String</ReturnType>
+<Implementation><![CDATA[
+	//return ..DisplayToLogical(value)
+	set dollarH=$zdatetime(8,7)
+	return $zdatetime(dolarH,-2)
+]]></Implementation>
+</Method>
+
+<Method name="Test">
+<ClassMethod>1</ClassMethod>
+<FormalSpec>repop=1</FormalSpec>
+<Implementation><![CDATA[
+
+	set now=$zdatetime($ztimestamp,-2)
+	write "now="_now,!
+	set logicalToDisplay=..LogicalToDisplay(now)
+	write "LogicalToDisplay()=",logicalToDisplay,!
+	set displayToLogical=..DisplayToLogical(logicalToDisplay)
+	write "DisplayToLogical()=",displayToLogical,!
+	if (now'=displayToLogical) {
+		write "Error! now=",now," displayToLogical=",displayToLogical,!
+	}
+	
+	if ( repop ) {
+		do ##class(epic.Log).%DeleteExtent()
+		do ##class(epic.Log).Populate(100000)
+	}
+	&sql(select count(*) into :logicalCount from epic.Log where Timestamp between '315532800' and '473385600')
+	write "# of log records between 1980 and 1985 logicalCount=",logicalCount,!
+	
+	#SQLCompile Select=Runtime
+	do $system.SQL.SetSelectMode(2)	// 2 = Display
+	&sql(select count(*) into :displayCount from epic.Log where Timestamp between '19800101T00:00:00Z' and '19850101T00:00:00Z')
+	write "# of log records between 1980 and 1985 displayCount= ",displayCount,!
+	
+	&sql(select count(*) into :expressionCount from epic.Log where Timestamp > CURRENT_TIMESTAMP)
+	write "# of log records where Timestamp > CURRENT_TIMESTAMP = ",expressionCount,!
+	
+	&sql(select count(*) into :expressionCountCalc from epic.Log where CalcTimestamp > CURRENT_TIMESTAMP)
+	write "# of log records where CalcTimestamp > CURRENT_TIMESTAMP = ",expressionCountCalc,!
+]]></Implementation>
+</Method>
+
+<Method name="q">
+<ClassMethod>1</ClassMethod>
+<Implementation><![CDATA[
+	&sql(select count(*) into :count from epic.Log where CalcTimestamp > CURRENT_TIMESTAMP)
+	Write "> count=",count,!
+	&sql(select count(*) into :count from epic.Log where CalcTimestamp < CURRENT_TIMESTAMP)
+	Write "< count=",count,!
+]]></Implementation>
+</Method>
+</Class>
+</Export>
